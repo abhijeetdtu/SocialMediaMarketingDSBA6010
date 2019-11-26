@@ -1,0 +1,245 @@
+---
+title: "Tweets"
+output:
+     pdf_document:
+         latex_engine: xelatex
+---
+
+```{r setup, include=FALSE , warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### References
+* https://rstudio-pubs-static.s3.amazonaws.com/265713_cbef910aee7642dc8b62996e38d2825d.html
+* http://www.sthda.com/english/wiki/text-mining-and-word-cloud-fundamentals-in-r-5-simple-steps-you-should-know
+
+```{r}
+library(janitor)
+library(tm)
+library(dplyr)
+library(tidyr)
+library(wordcloud)
+library(ggplot2)
+library(tidytext)
+library(SentimentAnalysis)
+library(syuzhet)
+library(readr)
+library(purrr)
+```
+
+```{r}
+mytheme <- theme(panel.grid.major = element_blank()
+                 , panel.grid.minor = element_blank()
+                 ,panel.background = element_rect(fill = '#1b212c')
+                 ,plot.background  = element_rect(fill = '#1b212c', colour = 'white')
+                 ,axis.text = element_text(family = NULL, face = "bold", colour = "white",size = 8)
+                 ,legend.background = element_rect(fill = '#1b212c', colour = 'white'))
+```
+# Analyzing Twitter Data
+
+
+```{r cars}
+
+tweetsDF <- readr::read_csv("./../DataExtract/Data/Top Tweets.csv")
+tweetsDF <- clean_names(tweetsDF)
+tweetsDF$tweet_number_of_likes <- gsub("," , "" , tweetsDF$tweet_number_of_likes )
+tweetsDF$tweet_number_of_likes <- as.numeric(tweetsDF$tweet_number_of_likes )
+head(tweetsDF)
+```
+
+## Tweet content analysis
+
+
+```{r pressure, echo=FALSE}
+
+comments <- tweetsDF$comment[!is.na(tweetsDF$comment)] %>% unique()
+tweets <- tweetsDF$tweet_content[!is.na(tweetsDF$tweet_content)] %>% unique()
+
+documents <- c(tweets ,comments )
+head(documents)
+tail(documents)
+
+```
+
+### Converting to corpus
+```{r}
+corpus <- Corpus(VectorSource(documents))
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+#corpus <- tm_map(corpus, stemDocument)
+
+as.character(corpus[3])
+```
+
+### Word Frequencies
+```{r}
+dtm <- DocumentTermMatrix(corpus)
+freq <- colSums(as.matrix(dtm))
+
+wf <- data.frame(word=names(freq), freq=freq) 
+rownames(wf) <- seq(1:nrow(wf)) 
+
+wf <- wf %>% arrange(desc(freq))
+
+# remove hair and dye
+wf <- wf %>% filter(!(wf$word %in% c("hair" , "dye")))
+
+head(wf)
+```
+
+### Generating Word Cloud
+
+```{r , warning=FALSE}
+set.seed(1234)
+wordcloud(words = wf$word, freq = wf$freq, min.freq = 1,
+          max.words=300, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+```
+
+## Freq distribution
+
+```{r}
+
+ggplot(data = wf , aes(y = freq)) + 
+  geom_boxplot()
+```
+## Rare words
+
+```{r}
+head(wf %>% filter(freq > 5 & freq < 10 ))
+```
+
+## Waiting ? Wanting ? Thinking?
+
+```{r}
+head(wf %>% filter(word %in% c( "want" , "raw" , "deserve" , "need","buy" ,"wait" )))
+```
+
+## Brand Counts
+
+```{r}
+head(wf %>% filter(word %in% c("garnier" , "l'oreal" , "raw")))
+```
+* Not helpful
+
+## Color Counts
+
+```{r}
+colorsofInterest <- c("black" , "brown" , "red" , "purple" , "orange" , "blonde" , "green" , "silver" , "ash" , "grey" , "blue" , "auburn" ,  "golden")
+
+colorCode <-  c("#000000" , "#b5651d" , "#e71837" , "#EE82EE" , "#FF6347" , "#faf0be" , "#32CD32" , "#c0c0c0" , "#8B0000" , "#808080" , "#00BFFF"  , "#ffd700")
+
+colorCounts <- wf %>% filter(word %in% colorsofInterest)
+colorCounts$word <- factor(colorCounts$word , levels = colorsofInterest)
+colorCounts
+```
+
+
+```{r}
+ggplot(data = colorCounts , aes(x = word , y = freq) ) + 
+  geom_col(fill = colorCode)
+```
+## Shade Count
+
+```{r}
+wf %>% filter(word %in% c("dark" , "light" , "medium" , "fade","highlight" , "ombre" , "streak"))
+```
+
+### Sentiments
+
+```{r}
+
+sent <- analyzeSentiment(tweets)
+sent <- sent[,1:4]
+sent <- as.data.frame(sent)
+sent <- cbind(sent , tweet = tweets)
+sent <- clean_names(sent)
+summary(sent)
+```
+
+```{r}
+sent %>% filter(negativity_gi > 0.14286)  %>% arrange(desc(negativity_gi)) %>% select(tweet)
+
+
+expneg <- sent %>% filter(negativity_gi > 0.14286)  %>% arrange(desc(negativity_gi)) %>% select(tweet)
+write.csv(expneg, "./../DataExtract/Data/negtweets.csv" )
+
+exppos <- sent %>% filter(positivity_gi > 0.14286)  %>% arrange(desc(positivity_gi)) %>% select(tweet)
+write.csv(exppos, "./../DataExtract/Data/postweets.csv" )
+```
+
+## Emotion analysis
+
+```{r}
+emotions <- lapply(documents , get_nrc_sentiment)
+emotionsdf <- cbind(unlist(emotions  , documents))
+
+emotionsdf <- reduce(emotions , rbind , .init = data.frame())
+emotionsdf$tweet <- documents
+
+head(emotionsdf)
+```
+
+```{r}
+
+meltedEmotions <- emotionsdf %>% gather(key="emotion" , value="count" , -tweet)
+
+ggplot(data=meltedEmotions, aes(y = count ,x= emotion,fill=emotion))+
+  geom_col()+
+  lege+ mytheme
+```
+
+### Joy
+
+```{r , warning=FALSE}
+
+
+getWordCloud <- function(documents , count=200){
+  corpus <- Corpus(VectorSource(documents))
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, removeWords, stopwords("english"))
+  #corpus <- tm_map(corpus, stemDocument)
+  dtm <- DocumentTermMatrix(corpus , control = )
+  freq <- colSums(as.matrix(dtm))
+  
+  wf <- data.frame(word=names(freq), freq=freq) 
+  rownames(wf) <- seq(1:nrow(wf)) 
+  
+  wf <- wf %>% arrange(desc(freq))
+  
+  # remove hair and dye
+  wf <- wf %>% filter(!(wf$word %in% c("hair" , "dye")))
+  wordcloud(words = wf$word, freq = wf$freq, min.freq = 1,
+          max.words=count, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+}
+
+selcdf <- emotionsdf %>% filter(joy > 2)  %>% arrange(desc(joy)) %>% select(tweet)
+getWordCloud(selcdf,100)
+```
+
+
+### Negative
+```{r , warning=FALSE}
+selcdf <- emotionsdf %>% filter(negative > 2)  %>% arrange(desc(negative)) %>% select(tweet)
+getWordCloud(selcdf,100)
+```
+
+### Trust
+```{r , warning=FALSE}
+selcdf <- emotionsdf %>% filter(trust > 2)  %>% arrange(desc(trust)) %>% select(tweet)
+getWordCloud(selcdf,100)
+```
+
+### Positive
+```{r , warning=FALSE}
+selcdf <- emotionsdf %>% filter(positive > 2)  %>% arrange(desc(positive)) %>% select(tweet)
+getWordCloud(selcdf,100)
+```
+
+
+
+
+

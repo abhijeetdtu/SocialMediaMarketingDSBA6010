@@ -1,0 +1,240 @@
+---
+title: "EDA_ProductAnalysis"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+mytheme <- theme(panel.grid.major = element_blank()
+                 , panel.grid.minor = element_blank()
+                 ,panel.background = element_rect(fill = '#1b212c')
+                 ,plot.background  = element_rect(fill = '#1b212c', colour = 'white')
+                 ,axis.text = element_text(family = NULL, face = "bold", colour = "white",size = 8)
+                 ,axis.title = element_text(family = NULL, face = "bold", colour = "white",size = 10)
+                 ,legend.background = element_rect(fill = '#1b212c', colour = 'white'))
+```
+
+```{r cars, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(ggplotify)
+
+df <- read.csv("./../DataExtract/Data/processed.json_partial.csv")
+df <- as.data.frame(df)
+print(colnames(df))
+```
+
+### Data Correction
+
+```{r }
+df$totalRatingsNum <- as.numeric(gsub("," , "", as.character(df$totalRatings)))
+df$rank <- as.numeric(gsub("," , "", as.character(df$rank)))
+```
+### Correcting Brand Names
+
+
+```{r pressure}
+table(df$brand)
+
+# correcting l'oreal spellings
+df[which(regexpr("L'" , df$brand) >= 0), ]$brand <- "L'Oreal"
+```
+
+### Price Analysis
+
+``` {r }
+
+## Estimated bands
+df %>% 
+  group_by(brand) %>%
+  summarise(meanprice = mean(price))
+
+## Price
+ggplot(data = df , aes(x = df$price)) + 
+  geom_density(color = "white") + 
+  geom_vline(xintercept = 8.45 , color="purple" ) + 
+  mytheme
+
+df$priceband <- case_when( df$price < 7.5 ~ "Low"
+                           , df$price < 12.5 ~ "Medium"
+                           ,TRUE ~ "High")
+```
+
+
+### Ratings Analysis
+
+```{r }
+## Ratings
+ggplot(data = df , aes(x = df$stars)) + 
+  geom_density() + 
+  scale_x_continuous(breaks = seq(2.5,  5 , 0.1))
+
+df$starsBand <- case_when( df$stars < 3.9 ~ "Poor"
+                          ,df$stars < 4.3 ~ "Good"
+                          ,TRUE ~ "Excellent")
+```
+
+
+### Price Vs Ratings
+
+``` {r }
+table(df$starsBand , df$priceband)
+
+ggplot(data = df, aes(x = df$stars , y = df$price)) + geom_jitter(width = 0.1)
+```
+
+```{r }
+
+
+
+ggplot(data = df, aes(x = df$price , y = df$totalRatingsNum)) + geom_jitter(width = 0.1)
+
+ggplot(data = df, aes(x = df$totalRatingsNum)) + geom_density()
+ggplot(data = df, aes(x = log(df$totalRatingsNum))) + geom_density()
+
+ggplot(data = df, aes(x = df$price , y = log(df$totalRatingsNum))) + geom_jitter(width = 0.1 , color="white") + geom_smooth() + mytheme
+```
+
+There is a decreasing trend in the number of ratings as the price increase, so fewer people buy products with higher price.
+
+
+### Demand Curve
+
+```{r}
+
+baseprice <- 4
+demandDf <- df[,c("totalRatingsNum" , "price")] %>% arrange(desc(price))
+demandDf$demand <- cumsum(demandDf$totalRatingsNum)
+demandDf$profit <- (demandDf$price - baseprice)*demandDf$demand
+head(demandDf)
+
+ggplot(data = demandDf , aes(x = price , y = profit)) +
+  geom_point(color = "white") +
+  geom_smooth() + mytheme
+```
+### Amazon Rank Vs Price , Rating , Total Ratings
+
+```{r}
+
+ggplot(data = df , aes(x =df$price , y=log(df$rank) )) + geom_jitter(width = 0.1) + geom_smooth()
+ggplot(data = df , aes(x =df$stars , y=log(df$rank) )) + geom_jitter(width = 0.1) + geom_smooth()
+ggplot(data = df , aes(x =log(df$totalRatingsNum) , y=log(df$rank) )) +
+  geom_jitter(width = 0.1 , color="white") + 
+  geom_smooth() + mytheme
+```
+
+As price increases the products are not as popular. Rank decreases as the number of people rating the product increases.
+
+
+### Color Analysis
+
+* Color Distribution
+
+``` {r }
+colorDf <- read.csv("./../DataExtract/Data/processed.json_color.csv")
+colorDf$Color <- as.character(colorDf$Color)
+splitColors <- strsplit(colorDf$Color , split = ' ')
+
+combinedColors <- Reduce(f = function(a,b) c(a , b) , x = splitColors , init=list())
+freqColors <- as.data.frame(table(unlist(splitColors)))
+freqColors$Var1 <- as.character(freqColors$Var1)
+
+sortedFreqColors <- freqColors %>% arrange(desc(Freq))
+sortedFreqColors$Var1 <- factor(as.character(sortedFreqColors$Var1), levels=sortedFreqColors$Var1 )
+
+head(sortedFreqColors)
+
+ggplot(data= sortedFreqColors[1:20,] , aes(x = Var1 , y=Freq)) +
+  theme(axis.text=element_text(size=6)) +
+  geom_bar(stat='identity') + 
+  coord_flip() + mytheme
+
+```
+
+* Summarising Various Colors
+
+```{r}
+#combined = data.frame(price = rep(colorDf[,c("price", "totalRatings")], sapply(splitColors, length)), color = unlist(splitColors))
+
+repd <- colorDf[rep(row.names(colorDf) ,sapply(splitColors, length) ) , c("stars" ,"price" , "totalRatings" , "rank" , "brand")]
+repd$color <- unlist(splitColors)
+
+repd$totalRatingsNum <- as.numeric(gsub("," , "", as.character(repd$totalRatings)))
+repd$rank <- as.numeric(gsub("," , "", as.character(repd$rank)))
+repd[which(regexpr("L'" , repd$brand) >= 0), ]$brand <- "L'Oreal"
+
+head(repd)
+
+meanByColor <- repd %>% 
+  group_by(color) %>%
+  summarise(meanStar=mean(stars), meanPrice = mean(price) , meanNumRatings = mean(totalRatingsNum) , meanRank = mean(rank) , totalCount = n()) %>%
+  arrange(desc(meanNumRatings))
+
+head(meanByColor)
+
+```
+
+```{r}
+
+
+ggplot(data = meanByColor , aes(x = meanPrice , y= meanRank , label=color , color = color)) +
+    geom_jitter(width=1 , show.legend = FALSE) +
+    geom_text(alpha = 0.4, show.legend = FALSE)
+
+
+ggplot(data = meanByColor , aes(x = meanPrice , y= meanRank , label=color , color = color)) +
+    geom_text(alpha = 0.6, show.legend = FALSE) + 
+  scale_x_continuous(limits = c(5,10)) + 
+  scale_y_continuous(limits = c(0,10000)) 
+
+
+library(treemap)
+
+repd %>% group_by(brand ,color) %>% summarise(mprice = mean(price))
+
+
+# Garnier is most popular. Popluarity proportional to total Number of ratings
+treemap(repd,
+        vSize = "totalRatingsNum",
+        vColor = "price",
+        index = c("brand" , "color")
+        ,palette = "Blues"
+        , fun.aggregate = "mean"
+        , position.legend = "right"
+        , type="value")
+
+
+# Brown and Blonde are Ranked by amazon at the top in most brands
+# Got2b is struggling as people don't really like their products
+repd$rankInverse = 1/repd$rank
+treemap(repd,
+        vSize = "rankInverse",
+        vColor = "stars",
+        index = c("brand" , "color")
+        ,palette = "Spectral"
+        , fun.aggregate = "mean"
+        , position.legend = "right"
+        , type="value")
+
+
+# RAW is being used by fewer people but they seem to like it
+# It has very different palette on offer compared to others. Very stark colors.
+# Most colors in this chart are ones that are less common.
+repd$numRatingInverse = 1/repd$totalRatingsNum
+treemap(repd,
+        vSize = "numRatingInverse",
+        vColor = "stars",
+        index = c("brand" , "color")
+        ,palette = "Spectral"
+        , fun.aggregate = "mean"
+        , position.legend = "right"
+        , type="value")
+```
+
+
+

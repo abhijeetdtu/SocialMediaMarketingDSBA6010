@@ -1,0 +1,253 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+library(dplyr)
+library(tm)
+library(Matrix)
+library(rpart)
+library(ggplot2)
+```
+
+```{r cars}
+df <- read.csv("./../DataExtract/Data/insta_hairdye_tag.csv")
+head(df)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+docs <- df %>% pull("Content")
+head(docs)
+```
+
+```{r}
+
+hashtagpat <- "(#[:alnum:]+)"
+userrefpat <- "(@[[:alnum:]_]+)"
+ndf <- docs %>% as.character()
+
+
+hashtags <- sapply(sapply(str_extract_all(ndf , regex(hashtagpat)) , unique), function(l) { paste( l , collapse = "," )}) %>% as.character()
+userref <- sapply(sapply(str_extract_all(ndf , regex(userrefpat)) , unique), function(l) { paste( l , collapse = "," )}) %>% as.character()
+
+comb <- paste(hashtags , userref , sep= ",") %>% str_remove("^,")
+cleanContent <- ndf %>% str_remove_all( hashtagpat) %>% str_remove_all( userrefpat )
+
+kdf <- data.frame(hashtags = comb , 
+                  content =  cleanContent ,
+                  likes = df$Likes,
+                  views = df$Views
+                  )
+
+
+pdf <- kdf %>% separate_rows(hashtags , sep = "," )
+head(pdf)
+```
+
+
+```{r}
+pdf$likes <- as.numeric(pdf$likes %>% str_remove(","))
+pdf$views <- as.numeric(pdf$views %>% str_remove(","))
+head(pdf)
+```
+
+
+```{r}
+
+pdf$vieworlikes <- case_when(is.na(pdf$likes) ~ pdf$views
+                             ,TRUE ~ pdf$likes)
+
+pdf$isvideo <- as.factor(case_when(is.na(pdf$views) ~ 0
+                             ,TRUE ~ 1))
+
+
+head(pdf)
+```
+
+```{r}
+
+pdf %>% group_by(hashtags) %>% 
+  summarise(count = n() , meanlikes = mean(likes , na.rm = TRUE) , meanviews = mean(views , na.rm = TRUE) ) %>%
+  arrange(desc(count) , desc(meanlikes))
+
+```
+
+
+```{r}
+
+npdf <- aggregate(pdf$content , list(pdf$hashtags), paste, collapse="")
+#
+
+
+npdf2 <- pdf %>% group_by(hashtags) %>% 
+   summarise( count = n() , meanlikes = mean(likes , na.rm = TRUE) , meanviews = mean(views , na.rm = TRUE) )
+
+nppdf <- merge(npdf , npdf2 , by.x="Group.1" , by.y="hashtags")
+
+
+colnames(nppdf) <- c("hashtags" , "content" , "count" , "meanlikes" , "meanviews")
+
+head(nppdf)
+```
+```{r}
+
+corpus <- Corpus(VectorSource(nppdf %>% pull("content")))
+
+minTermFreq <- 100
+maxTermFreq <- 20000
+
+dtm <- DocumentTermMatrix(corpus , control = list(tolower = TRUE,removePunctuation = TRUE,
+                                         stopwords = TRUE,
+                                         removeNumbers = T,
+                                         wordLengths=c(4, 10),
+                                         bounds = list(global = c(minTermFreq, maxTermFreq))
+                                         ))
+
+print(dtm)
+```
+
+
+```{r}
+write.csv((as.matrix(dtm)), "./../DataExtract/Data/dtm_hashtags.csv")
+```
+
+
+```{r}
+
+fcluster2 <-  as.matrix(dtm) %>% as.data.frame.matrix()
+fcluster2$hashtag <- nppdf$hashtags
+
+rownames(fcluster2) <-  nppdf$hashtags
+head(fcluster2)
+```
+
+### Elbow method to find k
+```{r}
+ks <- seq(1 , 10 , 1) 
+withiness <- sapply(ks, function(k){
+  kmeans(fcluster2 %>% select(-hashtag) , centers = k)$tot.withinss
+})
+
+head(withiness)
+head(ks)
+```
+
+```{r}
+ggplot(data = data.frame(w = withiness , k= ks ) , aes(x = k , y = w)) +
+  geom_point() +
+  geom_line()
+```
+
+```{r}
+clusters <- kmeans(fcluster2 %>% select(-hashtag) , centers = 30)
+
+fcluster2$cluster =  clusters$cluster
+
+head(fcluster2,30)
+colnames(fcluster2)
+```
+
+
+```{r}
+table(fcluster2$cluster)
+```
+
+```{r}
+
+sentToVec <- function(sent , cols){
+  c <- Corpus(VectorSource(c(sent)))
+  dtm <- DocumentTermMatrix(c , control = list(tolower = TRUE,removePunctuation = TRUE,
+                                         stopwords = TRUE,
+                                         removeNumbers = T))
+  
+  ddf <- as.matrix(dtm) %>% as.data.frame.matrix()
+  cnames <- colnames(ddf)
+  
+  v <- lapply(cols, function(c){
+    if(c %in% cnames){
+      ddf[c]
+    }
+    else{
+      0
+    }
+  })
+  rdf = data.frame(counts = v)
+  colnames(rdf) <- cols
+  rdf
+}
+
+
+getSortedDistances <- function(vec , data){
+  #tdf <- rbind(vec , data)
+  #rownames(tdf) <- c("newpoint" , rownames(data))
+  
+  dists <- apply(data , 1, function(p1){
+    #sum((p1-vec)^2)
+    dist(rbind(vec , p1)) %>% as.numeric()
+  })
+  
+  df <- data.frame(dists = dists)
+  rownames(df) <- rownames(data)
+  df %>% tibble::rownames_to_column() %>% arrange(dists)
+  #
+  #(dist(tdf ) %>% 
+  #    as.matrix() %>% 
+  #    as.data.frame() %>% 
+  #    select("newpoint") %>% 
+  #    tibble::rownames_to_column() %>% 
+  #    arrange(newpoint))[-1,]
+  
+}
+
+predictKmeans <- function(vec , model){
+  centers <- model$centers
+  
+  clusterId <- getSortedDistances(vec , centers) [1,"rowname"] 
+  
+  as.numeric(clusterId)
+}
+
+predCluster <- function(sent ,data , model){
+  cols <- colnames(data %>% select(-hashtag , -cluster))
+  vec <- sentToVec(sent , cols)
+  clusterId <- predictKmeans(vec , model)
+  
+  print(paste("belongs to cluster : " , clusterId))
+  
+  fdata <- data %>% filter(data$cluster == clusterId) %>% select(-hashtag , -cluster)
+  print(paste("Data points after filtering on cluster : " , nrow(fdata) , "Before : ", nrow(data)))
+  
+  getSortedDistances(vec , fdata )
+}
+
+
+
+```
+
+
+```{r}
+
+predCluster("Look at my video and tell me what you think" ,fcluster2,clusters)
+
+s <- sentToVec("Look at my video and tell me what you think" , colnames(fcluster2 %>% select(-hashtag , -cluster)))
+
+ncol(withdf)
+
+system.time(
+  dist(rbind(s , fcluster2[100,]  %>% select(-hashtag , -cluster))) %>% as.numeric()
+)
+
+
+getSortedDistances(s , fcluster2[1:500,] %>% select(-hashtag , -cluster)) 
+```

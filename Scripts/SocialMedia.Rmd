@@ -1,0 +1,197 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+library(janitor)
+library(gsubfn)
+library(ggplot2)
+library(dplyr)
+library(tm)
+library(wordcloud)
+library(SentimentAnalysis)
+library(syuzhet)
+library(purrr)
+```
+
+```{r cars}
+
+ytdf <- read.csv("./../DataExtract/Data/YoutubeHowtoDyeHair.csv")
+nytdf <- ytdf %>% clean_names()
+nytdf$total_views <- str_remove(nytdf$total_views , "views")
+nytdf$total_views <- as.numeric(
+ gsubfn( "\\D",  list( "$"="", "M" = "e6", "K" = "e3"), nytdf$total_views)
+)
+head(nytdf)
+```
+
+```{r}
+
+nytdf %>% group_by(channel_name) %>% summarize(meanviews = mean(total_views) , sdviews = sd(total_views)) %>% arrange(desc(meanviews)) %>% top_n(20)
+ggplot(data= nytdf , aes(x = channel_name , y = total_views))+
+  geom_col()
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+summary(aov(data = nytdf , formula = total_views ~ channel_name ))
+```
+
+```{r}
+TukeyHSD(aov(data = nytdf , formula = total_views ~ channel_name ))
+```
+
+```{r}
+itdf <- read.csv("./../DataExtract/Data/Instagram_Garnier.csv")
+nitdf <- itdf %>% clean_names()
+nitdf$date <- strptime(nitdf$post_date , "%b %d, %Y")
+nitdf$dayofweek <- weekdays(nitdf$date)
+
+nitdf$likes <- as.numeric(str_remove(nitdf$likes , ","))
+
+head(nitdf)
+```
+
+```{r}
+ggplot(data= nitdf , aes(x = dayofweek , y = likes))+
+  geom_col()
+```
+```{r}
+summary(aov(formula = likes ~ dayofweek , data= nitdf))
+```
+
+```{r}
+TukeyHSD(aov(formula = likes ~ dayofweek , data= nitdf))
+```
+
+
+## Text Analytics
+```{r}
+lis <- list(c("./../DataExtract/Data/insta_hairdye_tag.csv" , "Content" ,"insta") ,
+         c("./../DataExtract/Data/Instagram_Garnier.csv" , "Content","insta") ,
+         c("./../DataExtract/Data/Tweets_hair_highlights.csv" , "Tweet_Content","twitter") , 
+         c("./../DataExtract/Data/YoutubeHowtoDyeHair.csv" , "Description","youtube") 
+         )
+
+
+df <- lapply(lis , function(a){
+  ad <- read.csv(a[1])
+  data.frame(content = as.character(ad %>% pull(a[2]))  , channel = a[3]) 
+})
+
+ndf <- bind_rows(df)
+colnames(ndf) <- c("docs" , "channel")
+ndf$docs <- as.character(ndf$docs)
+```
+
+
+
+```{r}
+
+wc <- function(docs){
+  corpus <- Corpus(VectorSource(docs))
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, removeWords, stopwords("english"))
+
+  dtm <- DocumentTermMatrix(corpus)
+  freq <- colSums(as.matrix(dtm))
+  
+  wf <- data.frame(word=names(freq), freq=freq) 
+  rownames(wf) <- seq(1:nrow(wf)) 
+  
+  wf <- wf %>% arrange(desc(freq))
+  
+  # remove hair and dye
+  wf <- wf %>% filter(!(wf$word %in% c("hair" , "dye" , "hairdye")))
+
+}
+
+wf <- wc(ndf$docs)
+```
+
+
+```{r , warning=FALSE}
+set.seed(1234)
+wordcloud(words = wf$word, freq = wf$freq, min.freq = 1,
+          max.words=300, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+```
+
+
+
+
+```{r}
+colorCounts <- wf %>% filter(word %in% c("black" , "brown" , "red" , "purple" , "orange" , "blonde" , "green" , "silver"))
+colorCounts
+```
+
+
+## Shade Count
+
+```{r}
+wf %>% filter(word %in% c("dark" , "light" , "medium" , "fade","highlight"))
+```
+
+### Sentiments
+
+```{r}
+
+sent <- analyzeSentiment(ndf$docs)
+sent <- sent[,1:4]
+sent <- as.data.frame(sent)
+sent <- cbind(sent , tweet = ndf$docs)
+sent <- clean_names(sent)
+summary(sent)
+```
+
+
+```{r}
+head(sent %>% filter(sentiment_gi > 0.8)  %>% arrange(desc(sentiment_gi      )) %>% select(tweet))
+```
+
+
+### Channel Wise emotions
+
+```{r}
+
+p <- function(channel){
+  filterdf <- ndf %>% filter(ndf$channel == "youtube" )
+  emotions <- lapply(filterdf$docs , get_nrc_sentiment)
+  emotionsdf <- cbind(unlist(emotions  , filterdf$docs))
+  
+  emotionsdf <- reduce(emotions , rbind , .init = data.frame())
+  emotionsdf$tweet <- filterdf$docs
+  emotionsdf$channel = channel
+  #meltedEmotions <- emotionsdf %>% gather(key="emotion" , value="count" , -tweet , -channel)
+  #meltedEmotions
+  emotionsdf
+}  
+
+
+emodf <- bind_rows(lapply(c("youtube", "twitter" , "insta") , function(c){p(c)}))
+
+meltedEmotions <- emodf %>% gather(key="emotion" , value="count" , -tweet , -channel)
+meltedEmotions
+
+
+```
+
+```{r}
+
+plotdf <- meltedEmotions %>% select(-tweet) %>% group_by(channel , emotion) %>% summarise(totalcount = mean(count))
+
+
+ggplot(data=plotdf, aes(y = totalcount ,x= emotion,fill=channel))+
+  geom_col() 
+```
