@@ -16,3 +16,16 @@
 
 * All the scripts for Data Analysis in R are under ``` ./Scripts/ ```
   - These are markdown files and should be self explainatory
+
+
+## R - Libraries used
+  - SentimentAnalysis
+    - For analysing sentiments of various tweets
+  -  syuzhet
+    - For emotion analysis
+  - wordcloud
+    - To get an overall sense of things happening
+  - tm
+    - The backbone text analytics package
+  - treemap
+    - For specific visualizations needed to view hierarchical information
